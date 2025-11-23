@@ -15,6 +15,8 @@ import {
     Generate,
     getExtensionPrompt,
     getExtensionPromptMaxDepth,
+    getMediaDisplay,
+    getMediaIndex,
     getRequestHeaders,
     getStoppingStrings,
     is_send_press,
@@ -48,11 +50,13 @@ import {
     createThumbnail,
     delay,
     download,
+    getAudioDurationFromDataURL,
     getBase64Async,
     getFileText,
     getImageSizeFromDataURL,
     getSortableDelay,
     getStringHash,
+    getVideoDurationFromDataURL,
     isDataURL,
     isUuid,
     isValidUrl,
@@ -74,7 +78,7 @@ import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
-import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL } from './constants.js';
+import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 
 export {
     openai_messages_count,
@@ -190,6 +194,7 @@ export const chat_completion_sources = {
     COMETAPI: 'cometapi',
     AZURE_OPENAI: 'azure_openai',
     ZAI: 'zai',
+    SILICONFLOW: 'siliconflow',
 };
 
 const character_names_behavior = {
@@ -234,6 +239,11 @@ export const reasoning_effort_types = {
     max: 'max',
 };
 
+export const ZAI_ENDPOINT = {
+    COMMON: 'common',
+    CODING: 'coding',
+};
+
 const sensitiveFields = [
     'reverse_proxy',
     'proxy_password',
@@ -276,6 +286,7 @@ export const settingsToUpdate = {
     cohere_model: ['#model_cohere_select', 'cohere_model', false, true],
     perplexity_model: ['#model_perplexity_select', 'perplexity_model', false, true],
     groq_model: ['#model_groq_select', 'groq_model', false, true],
+    siliconflow_model: ['#model_siliconflow_select', 'siliconflow_model', false, true],
     electronhub_model: ['#model_electronhub_select', 'electronhub_model', false, true],
     electronhub_sort_models: ['#electronhub_sort_models', 'electronhub_sort_models', false, true],
     electronhub_group_models: ['#electronhub_group_models', 'electronhub_group_models', false, true],
@@ -296,6 +307,7 @@ export const settingsToUpdate = {
     google_model: ['#model_google_select', 'google_model', false, true],
     vertexai_model: ['#model_vertexai_select', 'vertexai_model', false, true],
     zai_model: ['#model_zai_select', 'zai_model', false, true],
+    zai_endpoint: ['#zai_endpoint', 'zai_endpoint', false, true],
     openai_max_context: ['#openai_max_context', 'openai_max_context', false, false],
     openai_max_tokens: ['#openai_max_tokens', 'openai_max_tokens', false, false],
     wrap_in_quotes: ['#wrap_in_quotes', 'wrap_in_quotes', true, false],
@@ -328,6 +340,7 @@ export const settingsToUpdate = {
     image_inlining: ['#openai_image_inlining', 'image_inlining', true, false],
     inline_image_quality: ['#openai_inline_image_quality', 'inline_image_quality', false, false],
     video_inlining: ['#openai_video_inlining', 'video_inlining', true, false],
+    audio_inlining: ['#openai_audio_inlining', 'audio_inlining', true, false],
     continue_prefill: ['#continue_prefill', 'continue_prefill', true, false],
     continue_postfix: ['#continue_postfix', 'continue_postfix', false, false],
     function_calling: ['#openai_function_calling', 'function_calling', true, false],
@@ -382,6 +395,7 @@ const default_settings = {
     cohere_model: 'command-r-plus',
     perplexity_model: 'sonar-pro',
     groq_model: 'llama-3.3-70b-versatile',
+    siliconflow_model: 'deepseek-ai/DeepSeek-V3',
     electronhub_model: 'gpt-4o-mini',
     electronhub_sort_models: 'alphabetically',
     electronhub_group_models: false,
@@ -394,6 +408,7 @@ const default_settings = {
     moonshot_model: 'kimi-latest',
     fireworks_model: 'accounts/fireworks/models/kimi-k2-instruct',
     zai_model: 'glm-4.6',
+    zai_endpoint: ZAI_ENDPOINT.COMMON,
     azure_base_url: '',
     azure_deployment_name: '',
     azure_api_version: '2024-02-15-preview',
@@ -423,9 +438,10 @@ const default_settings = {
     vertexai_region: 'us-central1',
     vertexai_express_project_id: '',
     squash_system_messages: false,
-    image_inlining: false,
-    inline_image_quality: 'low',
-    video_inlining: false,
+    image_inlining: true,
+    inline_image_quality: 'auto',
+    video_inlining: true,
+    audio_inlining: true,
     bypass_status_check: false,
     continue_prefill: false,
     function_calling: false,
@@ -539,10 +555,11 @@ function setOpenAIMessages(chat) {
         // Apply the "wrap in quotes" option
         if (role == 'user' && oai_settings.wrap_in_quotes) content = `"${content}"`;
         const name = chat[j]['name'];
-        const image = chat[j]?.extra?.image;
-        const video = chat[j]?.extra?.video;
+        const media = chat[j]?.extra?.media;
+        const mediaDisplay = getMediaDisplay(chat[j]);
+        const mediaIndex = getMediaIndex(chat[j]);
         const invocations = chat[j]?.extra?.tool_invocations;
-        messages[i] = { 'role': role, 'content': content, name: name, 'image': image, 'video': video, 'invocations': invocations };
+        messages[i] = { 'role': role, 'content': content, name: name, 'media': media, 'mediaDisplay': mediaDisplay, 'mediaIndex': mediaIndex, 'invocations': invocations };
         j++;
     }
 
@@ -835,6 +852,7 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
 
     const imageInlining = isImageInliningSupported();
     const videoInlining = isVideoInliningSupported();
+    const audioInlining = isAudioInliningSupported();
     const canUseTools = ToolManager.isToolCallingSupported();
 
     // Insert chat messages as long as there is budget available
@@ -852,12 +870,38 @@ async function populateChatHistory(messages, prompts, chatCompletion, type = nul
             await chatMessage.setName(messageName);
         }
 
-        if (imageInlining && chatPrompt.image) {
-            await chatMessage.addImage(chatPrompt.image);
+        /**
+         * Inline a media attachment into the chat message.
+         * @param {MediaAttachment} media - The media attachment to inline.
+         */
+        async function inlineMediaAttachment(media) {
+            if (!media || !media.url) {
+                return;
+            }
+            if (!media.type) {
+                media.type = MEDIA_TYPE.IMAGE;
+            }
+            if (imageInlining && media.type === MEDIA_TYPE.IMAGE) {
+                await chatMessage.addImage(media.url);
+            }
+            if (videoInlining && media.type === MEDIA_TYPE.VIDEO) {
+                await chatMessage.addVideo(media.url);
+            }
+            if (audioInlining && media.type === MEDIA_TYPE.AUDIO) {
+                await chatMessage.addAudio(media.url);
+            }
         }
 
-        if (videoInlining && chatPrompt.video) {
-            await chatMessage.addVideo(chatPrompt.video);
+        if (Array.isArray(chatPrompt.media) && chatPrompt.media.length) {
+            if (chatPrompt.mediaDisplay === MEDIA_DISPLAY.LIST) {
+                for (const media of chatPrompt.media) {
+                    await inlineMediaAttachment(media);
+                }
+            }
+            if (chatPrompt.mediaDisplay === MEDIA_DISPLAY.GALLERY) {
+                const media = chatPrompt.media[chatPrompt.mediaIndex];
+                await inlineMediaAttachment(media);
+            }
         }
 
         if (canUseTools && Array.isArray(chatPrompt.invocations)) {
@@ -1553,6 +1597,8 @@ export function getChatCompletionModel(source = null) {
             return oai_settings.perplexity_model;
         case chat_completion_sources.GROQ:
             return oai_settings.groq_model;
+        case chat_completion_sources.SILICONFLOW:
+            return oai_settings.siliconflow_model;
         case chat_completion_sources.ELECTRONHUB:
             return oai_settings.electronhub_model;
         case chat_completion_sources.NANOGPT:
@@ -1886,6 +1932,24 @@ function saveModelList(data) {
         $('#model_groq_select').val(oai_settings.groq_model).trigger('change');
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.SILICONFLOW) {
+        $('#model_siliconflow_select').empty();
+        model_list.forEach((model) => {
+            $('#model_siliconflow_select').append(
+                $('<option>', {
+                    value: model.id,
+                    text: model.id,
+                }));
+        });
+
+        const selectedModel = model_list.find(model => model.id === oai_settings.siliconflow_model);
+        if (model_list.length > 0 && (!selectedModel || !oai_settings.siliconflow_model)) {
+            oai_settings.siliconflow_model = model_list[0].id;
+        }
+
+        $('#model_siliconflow_select').val(oai_settings.siliconflow_model).trigger('change');
+    }
+
     if (oai_settings.chat_completion_source === chat_completion_sources.FIREWORKS) {
         $('#model_fireworks_select').empty();
         model_list.forEach((model) => {
@@ -1956,6 +2020,20 @@ function saveModelList(data) {
         }
 
         $('#model_xai_select').val(oai_settings.xai_model).trigger('change');
+    }
+
+    if (oai_settings.chat_completion_source == chat_completion_sources.MOONSHOT) {
+        $('#model_moonshot_select').empty();
+        model_list.forEach((model) => {
+            $('#model_moonshot_select').append(new Option(model.id, model.id));
+        });
+
+        const selectedModel = model_list.find(model => model.id === oai_settings.moonshot_model);
+        if (model_list.length > 0 && (!selectedModel || !oai_settings.moonshot_model)) {
+            oai_settings.moonshot_model = model_list[0].id;
+        }
+
+        $('#model_moonshot_select').val(oai_settings.moonshot_model).trigger('change');
     }
 }
 
@@ -2416,6 +2494,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
     if (isZai) {
         generate_data['top_p'] = generate_data.top_p || 0.01;
         generate_data['stop'] = getCustomStoppingStrings(1);
+        generate_data['zai_endpoint'] = oai_settings.zai_endpoint || ZAI_ENDPOINT.COMMON;
         delete generate_data.presence_penalty;
         delete generate_data.frequency_penalty;
     }
@@ -2440,7 +2519,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         generate_data['seed'] = oai_settings.seed;
     }
 
-    if ((isOAI && /^(o1|o3|o4)/.test(oai_settings.openai_model)) || (isAzureOpenAI && /^(o1|o3|o4)/.test(oai_settings.azure_openai_model))) {
+    if ((isOAI && /^(o1|o3|o4)/.test(model)) || (isAzureOpenAI && /^(o1|o3|o4)/.test(model))) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
@@ -2451,7 +2530,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         delete generate_data.top_p;
         delete generate_data.frequency_penalty;
         delete generate_data.presence_penalty;
-        if (oai_settings.openai_model.startsWith('o1')) {
+        if (model.startsWith('o1')) {
             generate_data.messages.forEach((msg) => {
                 if (msg.role === 'system') {
                     msg.role = 'user';
@@ -2463,14 +2542,19 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         }
     }
 
-    if ((isOAI && /^gpt-5/.test(oai_settings.openai_model)) || (isAzureOpenAI && /^gpt-5/.test(oai_settings.azure_openai_model))) {
+    if ((isOAI && /^gpt-5/.test(model)) || (isAzureOpenAI && /^gpt-5/.test(model))) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
         delete generate_data.top_logprobs;
-        if (/chat-latest/.test(oai_settings.openai_model)) {
+        if (/gpt-5-chat-latest/.test(model)) {
             delete generate_data.tools;
             delete generate_data.tool_choice;
+        } else if (/gpt-5.1/.test(model) && !/chat-latest/.test(model)) {
+            delete generate_data.frequency_penalty;
+            delete generate_data.presence_penalty;
+            delete generate_data.logit_bias;
+            delete generate_data.stop;
         } else {
             delete generate_data.temperature;
             delete generate_data.top_p;
@@ -2507,7 +2591,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
             let text = '';
             const swipes = [];
             const toolCalls = [];
-            const state = { reasoning: '', image: '' };
+            const state = { reasoning: '', images: [] };
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) return;
@@ -2572,9 +2656,9 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
         }
         return data?.delta?.text || '';
     } else if ([chat_completion_sources.MAKERSUITE, chat_completion_sources.VERTEXAI].includes(chat_completion_source)) {
-        const inlineData = data?.candidates?.[0]?.content?.parts?.find(x => x.inlineData)?.inlineData;
-        if (inlineData) {
-            state.image = `data:${inlineData.mimeType};base64,${inlineData.data}`;
+        const inlineData = data?.candidates?.[0]?.content?.parts?.filter(x => x.inlineData && !x.thought)?.map(x => x.inlineData) || [];
+        if (Array.isArray(inlineData) && inlineData.length > 0) {
+            state.images.push(...inlineData.map(x => `data:${x.mimeType};base64,${x.data}`).filter(isDataURL));
         }
         if (show_thoughts) {
             state.reasoning += (data?.candidates?.[0]?.content?.parts?.filter(x => x.thought)?.map(x => x.text)?.[0] || '');
@@ -2593,15 +2677,15 @@ export function getStreamingReply(data, state, { chatCompletionSource = null, ov
         }
         return data.choices?.[0]?.delta?.content || '';
     } else if (chat_completion_source === chat_completion_sources.OPENROUTER) {
-        const imageUrl = data?.choices?.[0]?.delta?.images?.find(x => x.type === 'image_url')?.image_url?.url;
-        if (imageUrl) {
-            state.image = imageUrl;
+        const imageUrls = data?.choices?.[0]?.delta?.images?.filter(x => x.type === 'image_url')?.map(x => x?.image_url?.url) || [];
+        if (Array.isArray(imageUrls) && imageUrls.length > 0) {
+            state.images.push(...imageUrls.filter(isDataURL));
         }
         if (show_thoughts) {
             state.reasoning += (data.choices?.filter(x => x?.delta?.reasoning)?.[0]?.delta?.reasoning || '');
         }
         return data.choices?.[0]?.delta?.content ?? data.choices?.[0]?.message?.content ?? data.choices?.[0]?.text ?? '';
-    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI].includes(chat_completion_source)) {
+    } else if ([chat_completion_sources.CUSTOM, chat_completion_sources.POLLINATIONS, chat_completion_sources.AIMLAPI, chat_completion_sources.MOONSHOT, chat_completion_sources.COMETAPI, chat_completion_sources.ELECTRONHUB, chat_completion_sources.NANOGPT, chat_completion_sources.ZAI, chat_completion_sources.SILICONFLOW].includes(chat_completion_source)) {
         if (show_thoughts) {
             state.reasoning +=
                 data.choices?.filter(x => x?.delta?.reasoning_content)?.[0]?.delta?.reasoning_content ??
@@ -2899,12 +2983,27 @@ class Message {
     }
 
     /**
+     * Ensures the content is an array. If it's a string, converts it to an array with a single text object.
+     * @returns {any[]} Content as an array
+     */
+    ensureContentIsArray() {
+        const textContent = this.content;
+        if (!Array.isArray(this.content)) {
+            this.content = [];
+            if (typeof textContent === 'string') {
+                this.content.push({ type: 'text', text: textContent });
+            }
+        }
+        return this.content;
+    }
+
+    /**
      * Adds an image to the message.
      * @param {string} image Image URL or Data URL.
      * @returns {Promise<void>}
      */
     async addImage(image) {
-        const textContent = this.content;
+        this.content = this.ensureContentIsArray();
         const isDataUrl = isDataURL(image);
         if (!isDataUrl) {
             try {
@@ -2921,10 +3020,7 @@ class Message {
         image = await this.compressImage(image);
 
         const quality = oai_settings.inline_image_quality || default_settings.inline_image_quality;
-        this.content = [
-            { type: 'text', text: textContent },
-            { type: 'image_url', image_url: { 'url': image, 'detail': quality } },
-        ];
+        this.content.push({ type: 'image_url', image_url: { 'url': image, 'detail': quality } });
 
         try {
             const tokens = await this.getImageTokenCost(image, quality);
@@ -2935,8 +3031,13 @@ class Message {
         }
     }
 
+    /**
+     * Adds a video to the message.
+     * @param {string} video Video URL or Data URL.
+     * @returns {Promise<void>}
+     */
     async addVideo(video) {
-        const textContent = this.content;
+        this.content = this.ensureContentIsArray();
         const isDataUrl = isDataURL(video);
         if (!isDataUrl) {
             try {
@@ -2951,19 +3052,50 @@ class Message {
         }
 
         // Note: No compression for videos (unlike images)
-        this.content = [
-            { type: 'text', text: textContent },
-            { type: 'video_url', video_url: { 'url': video } },
-        ];
+        this.content.push({ type: 'video_url', video_url: { 'url': video } });
 
         try {
-            // Convservative estimate for video token cost without knowing duration
             // Using Gemini calculation (263 tokens per second)
-            const tokens = 10000; // ~40 second video (60 seconds max)
-            this.tokens += tokens;
+            const duration = await getVideoDurationFromDataURL(video);
+            this.tokens += 263 * Math.ceil(duration);
         } catch (error) {
-            this.tokens += 10000;
+            // Convservative estimate for video token cost without knowing duration
+            this.tokens += 263 * 40; // ~40 second video (60 seconds max)
             console.error('Failed to get video token cost', error);
+        }
+    }
+
+    /**
+     * Adds a audio to the message.
+     * @param {string} audio Audio URL or Data URL.
+     * @returns {Promise<void>}
+     */
+    async addAudio(audio) {
+        this.content = this.ensureContentIsArray();
+        const isDataUrl = isDataURL(audio);
+        if (!isDataUrl) {
+            try {
+                const response = await fetch(audio, { method: 'GET', cache: 'force-cache' });
+                if (!response.ok) throw new Error('Failed to fetch audio');
+                const blob = await response.blob();
+                audio = await getBase64Async(blob);
+            } catch (error) {
+                console.error('Audio adding skipped', error);
+                return;
+            }
+        }
+
+        this.content.push({ type: 'audio_url', audio_url: { 'url': audio } });
+
+        try {
+            // Using Gemini calculation (32 tokens per second)
+            const duration = await getAudioDurationFromDataURL(audio);
+            this.tokens += 32 * Math.ceil(duration);
+        } catch (error) {
+            // Estimate for audio token cost without knowing duration
+            const tokens = 32 * 300; // ~5 minute audio
+            this.tokens += tokens;
+            console.error('Failed to get audio token cost', error);
         }
     }
 
@@ -3564,6 +3696,7 @@ function loadOpenAISettings(data, settings) {
     oai_settings.cohere_model = settings.cohere_model ?? default_settings.cohere_model;
     oai_settings.perplexity_model = settings.perplexity_model ?? default_settings.perplexity_model;
     oai_settings.groq_model = settings.groq_model ?? default_settings.groq_model;
+    oai_settings.siliconflow_model = settings.siliconflow_model ?? default_settings.siliconflow_model;
     oai_settings.electronhub_model = settings.electronhub_model ?? default_settings.electronhub_model;
     oai_settings.electronhub_sort_models = settings.electronhub_sort_models ?? default_settings.electronhub_sort_models;
     oai_settings.electronhub_group_models = settings.electronhub_group_models ?? default_settings.electronhub_group_models;
@@ -3576,6 +3709,7 @@ function loadOpenAISettings(data, settings) {
     oai_settings.moonshot_model = settings.moonshot_model ?? default_settings.moonshot_model;
     oai_settings.fireworks_model = settings.fireworks_model ?? default_settings.fireworks_model;
     oai_settings.zai_model = settings.zai_model ?? default_settings.zai_model;
+    oai_settings.zai_endpoint = settings.zai_endpoint ?? default_settings.zai_endpoint;
     oai_settings.custom_model = settings.custom_model ?? default_settings.custom_model;
     oai_settings.custom_url = settings.custom_url ?? default_settings.custom_url;
     oai_settings.custom_include_body = settings.custom_include_body ?? default_settings.custom_include_body;
@@ -3596,6 +3730,7 @@ function loadOpenAISettings(data, settings) {
     oai_settings.image_inlining = settings.image_inlining ?? default_settings.image_inlining;
     oai_settings.inline_image_quality = settings.inline_image_quality ?? default_settings.inline_image_quality;
     oai_settings.video_inlining = settings.video_inlining ?? default_settings.video_inlining;
+    oai_settings.audio_inlining = settings.audio_inlining ?? default_settings.audio_inlining;
     oai_settings.bypass_status_check = settings.bypass_status_check ?? default_settings.bypass_status_check;
     oai_settings.vertexai_express_project_id = settings.vertexai_express_project_id ?? default_settings.vertexai_express_project_id;
     oai_settings.show_thoughts = settings.show_thoughts ?? default_settings.show_thoughts;
@@ -3648,6 +3783,7 @@ function loadOpenAISettings(data, settings) {
     $(`#openai_inline_image_quality option[value="${oai_settings.inline_image_quality}"]`).prop('selected', true);
 
     $('#openai_video_inlining').prop('checked', oai_settings.video_inlining);
+    $('#openai_audio_inlining').prop('checked', oai_settings.audio_inlining);
 
     $('#model_openai_select').val(oai_settings.openai_model);
     $(`#model_openai_select option[value="${oai_settings.openai_model}"`).prop('selected', true);
@@ -3667,6 +3803,8 @@ function loadOpenAISettings(data, settings) {
     $(`#model_perplexity_select option[value="${oai_settings.perplexity_model}"`).prop('selected', true);
     $('#model_groq_select').val(oai_settings.groq_model);
     $(`#model_groq_select option[value="${oai_settings.groq_model}"`).prop('selected', true);
+    $('#model_siliconflow_select').val(oai_settings.siliconflow_model);
+    $(`#model_siliconflow_select option[value="${oai_settings.siliconflow_model}"`).prop('selected', true);
     $('#model_electronhub_select').val(oai_settings.electronhub_model);
     $(`#model_electronhub_select option[value="${oai_settings.electronhub_model}"`).prop('selected', true);
     $('#model_nanogpt_select').val(oai_settings.nanogpt_model);
@@ -3683,6 +3821,8 @@ function loadOpenAISettings(data, settings) {
     $(`#model_moonshot_select option[value="${oai_settings.moonshot_model}"`).prop('selected', true);
     $('#model_zai_select').val(oai_settings.zai_model);
     $(`#model_zai_select option[value="${oai_settings.zai_model}"`).prop('selected', true);
+    $('#zai_endpoint').val(oai_settings.zai_endpoint);
+    $(`#zai_endpoint option[value="${oai_settings.zai_endpoint}"`).prop('selected', true);
     $('#custom_model_id').val(oai_settings.custom_model);
     $('#custom_api_url_text').val(oai_settings.custom_url);
     $('#azure_base_url').val(oai_settings.azure_base_url);
@@ -3974,6 +4114,7 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         cohere_model: settings.cohere_model,
         perplexity_model: settings.perplexity_model,
         groq_model: settings.groq_model,
+        siliconflow_model: settings.siliconflow_model,
         xai_model: settings.xai_model,
         pollinations_model: settings.pollinations_model,
         aimlapi_model: settings.aimlapi_model,
@@ -3984,6 +4125,7 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         fireworks_model: settings.fireworks_model,
         cometapi_model: settings.cometapi_model,
         zai_model: settings.zai_model,
+        zai_endpoint: settings.zai_endpoint,
         custom_model: settings.custom_model,
         custom_url: settings.custom_url,
         custom_include_body: settings.custom_include_body,
@@ -4040,6 +4182,7 @@ async function saveOpenAIPreset(name, settings, triggerUi = true) {
         image_inlining: settings.image_inlining,
         inline_image_quality: settings.inline_image_quality,
         video_inlining: settings.video_inlining,
+        audio_inlining: settings.audio_inlining,
         bypass_status_check: settings.bypass_status_check,
         continue_prefill: settings.continue_prefill,
         continue_postfix: settings.continue_postfix,
@@ -4661,9 +4804,81 @@ function getZaiMaxContext(model, isUnlocked) {
     return Object.entries(contextMap).find(([key]) => model.includes(key))?.[1] || max_128k;
 }
 
+/**
+ * Get the maximum context size for the SiliconFlow model
+ * @param {string} model Model identifier
+ * @param {boolean} isUnlocked Whether context limits are unlocked
+ * @returns {number} Maximum context size in tokens
+ */
+function getSiliconflowMaxContext(model, isUnlocked) {
+    if (isUnlocked) {
+        return unlocked_max;
+    }
+
+    const contextMap = {
+        'baidu/ERNIE-4.5-300B-A47B': max_128k,
+        'ByteDance-Seed/Seed-OSS-36B-Instruct': max_256k,
+        'deepseek-ai/DeepSeek-R1': max_128k,
+        'deepseek-ai/DeepSeek-V3': max_128k,
+        'deepseek-ai/DeepSeek-V3.1': max_128k,
+        'deepseek-ai/DeepSeek-V3.1-Terminus': max_128k,
+        'deepseek-ai/DeepSeek-V3.2-Exp': max_128k,
+        'deepseek-ai/deepseek-vl2': max_4k,
+        'inclusionAI/Ling-1T': max_128k,
+        'inclusionAI/Ling-flash-2.0': max_128k,
+        'inclusionAI/Ling-mini-2.0': max_128k,
+        'inclusionAI/Ring-1T': max_128k,
+        'inclusionAI/Ring-flash-2.0': max_128k,
+        'meta-llama/Llama-3.3-70B-Instruct': max_32k,
+        'meta-llama/Meta-Llama-3.1-8B-Instruct': max_32k,
+        'MiniMaxAI/MiniMax-M1-80k': max_128k,
+        'MiniMaxAI/MiniMax-M2': max_128k,
+        'moonshotai/Kimi-K2-Instruct': max_128k,
+        'moonshotai/Kimi-K2-Instruct-0905': max_256k,
+        'moonshotai/Kimi-K2-Thinking': max_256k,
+        'openai/gpt-oss-120b': max_128k,
+        'openai/gpt-oss-20b': max_128k,
+        'Qwen/Qwen3-235B-A22B-Instruct-2507': max_256k,
+        'Qwen/Qwen3-235B-A22B-Thinking-2507': max_256k,
+        'Qwen/Qwen3-30B-A3B-Instruct-2507': max_256k,
+        'Qwen/Qwen3-30B-A3B-Thinking-2507': max_256k,
+        'Qwen/Qwen3-VL-235B-A22B-Instruct': max_256k,
+        'Qwen/Qwen3-VL-235B-A22B-Thinking': max_256k,
+        'Qwen/Qwen3-VL-30B-A3B-Instruct': max_256k,
+        'Qwen/Qwen3-VL-30B-A3B-Thinking': max_256k,
+        'Qwen/Qwen3-VL-32B-Instruct': max_256k,
+        'Qwen/Qwen3-VL-32B-Thinking': max_256k,
+        'Qwen/Qwen3-VL-8B-Instruct': max_256k,
+        'Qwen/Qwen3-VL-8B-Thinking': max_256k,
+        'stepfun-ai/step3': max_64k,
+        'tencent/Hunyuan-A13B-Instruct': max_128k,
+        'zai-org/GLM-4.5': max_128k,
+        'zai-org/GLM-4.5-Air': max_128k,
+        'zai-org/GLM-4.5V': max_64k,
+        'zai-org/GLM-4.6': max_200k,
+    };
+
+    // Return context size if model found, otherwise default to 32k
+    return Object.entries(contextMap).find(([key]) => model.includes(key))?.[1] || max_32k;
+
+}
+
+/**
+ * Get the maximum context size for the Moonshot model
+ * @param {string} model Model identifier
+ * @param {boolean} isUnlocked If context limits are unlocked
+ * @returns {number} Maximum context size in tokens
+ */
 function getMoonshotMaxContext(model, isUnlocked) {
     if (isUnlocked) {
         return unlocked_max;
+    }
+
+    if (Array.isArray(model_list) && model_list.length > 0) {
+        const modelInfo = model_list.find((record) => record.id === model);
+        if (modelInfo?.context_length) {
+            return modelInfo.context_length;
+        }
     }
 
     const contextMap = {
@@ -4839,6 +5054,15 @@ async function onModelChange() {
         oai_settings.groq_model = value;
     }
 
+    if ($(this).is('#model_siliconflow_select')) {
+        if (!value) {
+            console.debug('Null SiliconFlow model selected. Ignoring.');
+            return;
+        }
+        console.log('SiliconFlow model changed to', value);
+        oai_settings.siliconflow_model = value;
+    }
+
     if ($(this).is('#model_electronhub_select')) {
         if (!value) {
             console.debug('Null ElectronHub model selected. Ignoring.');
@@ -4898,6 +5122,10 @@ async function onModelChange() {
     }
 
     if (value && $(this).is('#model_moonshot_select')) {
+        if (!value) {
+            console.debug('Null Moonshot model selected. Ignoring.');
+            return;
+        }
         console.log('Moonshot model changed to', value);
         oai_settings.moonshot_model = value;
     }
@@ -4938,7 +5166,9 @@ async function onModelChange() {
             $('#openai_max_context').attr('max', max_2mil);
         } else if (value.includes('gemini-2.5-flash-image')) {
             $('#openai_max_context').attr('max', max_32k);
-        } else if (value.includes('gemini-2.0-flash') || value.includes('gemini-2.0-pro') || value.includes('gemini-exp') || value.includes('gemini-2.5-flash') || value.includes('gemini-2.5-pro') || value.includes('learnlm-2.0-flash') || value.includes('gemini-robotics')) {
+        } else if (value.includes('gemini-3-pro-image')) {
+            $('#openai_max_context').attr('max', max_64k);
+        }  else if (value.includes('gemini-3-pro') || value.includes('gemini-2.0-flash') || value.includes('gemini-2.0-pro') || value.includes('gemini-exp') || value.includes('gemini-2.5-flash') || value.includes('gemini-2.5-pro') || value.includes('learnlm-2.0-flash') || value.includes('gemini-robotics')) {
             $('#openai_max_context').attr('max', max_1mil);
         } else if (value.includes('gemma-3-27b-it')) {
             $('#openai_max_context').attr('max', max_128k);
@@ -5235,6 +5465,15 @@ async function onModelChange() {
         $('#temp_openai').attr('max', oai_max_temp).val(oai_settings.temp_openai).trigger('input');
     }
 
+    if (oai_settings.chat_completion_source === chat_completion_sources.SILICONFLOW) {
+        const maxContext = getSiliconflowMaxContext(oai_settings.siliconflow_model, oai_settings.max_context_unlocked);
+        $('#openai_max_context').attr('max', maxContext);
+        oai_settings.openai_max_context = Math.min(Number($('#openai_max_context').attr('max')), oai_settings.openai_max_context);
+        $('#openai_max_context').val(oai_settings.openai_max_context).trigger('input');
+        oai_settings.temp_openai = Math.min(oai_max_temp, oai_settings.temp_openai);
+        $('#temp_openai').attr('max', oai_max_temp).val(oai_settings.temp_openai).trigger('input');
+    }
+
     if (oai_settings.chat_completion_source == chat_completion_sources.ZAI) {
         const maxContext = getZaiMaxContext(oai_settings.zai_model, oai_settings.max_context_unlocked);
         $('#openai_max_context').attr('max', maxContext);
@@ -5290,6 +5529,7 @@ async function onConnectButtonClick(e) {
         [chat_completion_sources.COHERE]: { key: SECRET_KEYS.COHERE, selector: '#api_key_cohere', proxy: false },
         [chat_completion_sources.PERPLEXITY]: { key: SECRET_KEYS.PERPLEXITY, selector: '#api_key_perplexity', proxy: false },
         [chat_completion_sources.GROQ]: { key: SECRET_KEYS.GROQ, selector: '#api_key_groq', proxy: false },
+        [chat_completion_sources.SILICONFLOW]: { key: SECRET_KEYS.SILICONFLOW, selector: '#api_key_siliconflow', proxy: false },
         [chat_completion_sources.ELECTRONHUB]: { key: SECRET_KEYS.ELECTRONHUB, selector: '#api_key_electronhub', proxy: false },
         [chat_completion_sources.NANOGPT]: { key: SECRET_KEYS.NANOGPT, selector: '#api_key_nanogpt', proxy: false },
         [chat_completion_sources.DEEPSEEK]: { key: SECRET_KEYS.DEEPSEEK, selector: '#api_key_deepseek', proxy: true },
@@ -5372,6 +5612,9 @@ function toggleChatCompletionForms() {
     else if (oai_settings.chat_completion_source == chat_completion_sources.GROQ) {
         $('#model_groq_select').trigger('change');
     }
+    else if (oai_settings.chat_completion_source == chat_completion_sources.SILICONFLOW) {
+        $('#model_siliconflow_select').trigger('change');
+    }
     else if (oai_settings.chat_completion_source == chat_completion_sources.ELECTRONHUB) {
         $('#model_electronhub_select').trigger('change');
     }
@@ -5410,8 +5653,10 @@ function toggleChatCompletionForms() {
     }
 
     $('[data-source]').each(function () {
+        const mode = $(this).data('source-mode');
         const validSources = $(this).data('source').split(',');
-        $(this).toggle(validSources.includes(oai_settings.chat_completion_source));
+        const matchesSource = validSources.includes(oai_settings.chat_completion_source);
+        $(this).toggle(mode !== 'except' ? matchesSource : !matchesSource);
     });
 }
 
@@ -5498,12 +5743,14 @@ export function isImageInliningSupported() {
         'claude-3',
         'claude-opus-4',
         'claude-sonnet-4',
+        'claude-haiku-4',
         // Cohere
         'c4ai-aya-vision',
         'command-a-vision',
         // Google AI Studio
         'gemini-2.0',
         'gemini-2.5',
+        'gemini-3',
         'gemini-exp-1206',
         'learnlm',
         'gemini-robotics',
@@ -5524,6 +5771,12 @@ export function isImageInliningSupported() {
         'moonshot-v1-128k-vision-preview',
         // Z.AI (GLM)
         'glm-4.5v',
+        // SiliconFlow
+        'Qwen/Qwen3-VL-32B-Instruct',
+        'Qwen/Qwen3-VL-8B-Instruct',
+        'Qwen/Qwen3-VL-235B-A22B-Instruct',
+        'Qwen/Qwen3-VL-30B-A3B-Instruct',
+        'zai-org/GLM-4.5V',
     ];
 
     switch (oai_settings.chat_completion_source) {
@@ -5544,7 +5797,7 @@ export function isImageInliningSupported() {
         case chat_completion_sources.CLAUDE:
             return visionSupportedModels.some(model => oai_settings.claude_model.includes(model));
         case chat_completion_sources.OPENROUTER:
-            return (Array.isArray(model_list) && ['text+image->text+image', 'text+image->text'].includes(model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.modality));
+            return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.input_modalities?.includes('image'));
         case chat_completion_sources.CUSTOM:
             return true;
         case chat_completion_sources.MISTRALAI:
@@ -5568,6 +5821,8 @@ export function isImageInliningSupported() {
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.nanogpt_model)?.capabilities?.vision);
         case chat_completion_sources.ZAI:
             return visionSupportedModels.some(model => oai_settings.zai_model.includes(model));
+        case chat_completion_sources.SILICONFLOW:
+            return visionSupportedModels.some(model => oai_settings.siliconflow_model.includes(model));
         default:
             return false;
     }
@@ -5591,6 +5846,7 @@ export function isVideoInliningSupported() {
         'gemini-2.0',
         'gemini-2.5',
         'gemini-exp-1206',
+        'gemini-3',
     ];
 
     switch (oai_settings.chat_completion_source) {
@@ -5598,6 +5854,41 @@ export function isVideoInliningSupported() {
             return videoSupportedModels.some(model => oai_settings.google_model.includes(model));
         case chat_completion_sources.VERTEXAI:
             return videoSupportedModels.some(model => oai_settings.vertexai_model.includes(model));
+        case chat_completion_sources.OPENROUTER:
+            return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.input_modalities?.includes('video'));
+        default:
+            return false;
+    }
+}
+
+/**
+ * Check if the model supports video inlining
+ * @returns {boolean} True if the model supports audio inlining
+ */
+export function isAudioInliningSupported() {
+    if (main_api !== 'openai') {
+        return false;
+    }
+
+    if (!oai_settings.audio_inlining) {
+        return false;
+    }
+
+    // Only Gemini models support audio for now
+    const audioSupportedModels = [
+        'gemini-2.0',
+        'gemini-2.5',
+        'gemini-3',
+        'gemini-exp-1206',
+    ];
+
+    switch (oai_settings.chat_completion_source) {
+        case chat_completion_sources.MAKERSUITE:
+            return audioSupportedModels.some(model => oai_settings.google_model.includes(model));
+        case chat_completion_sources.VERTEXAI:
+            return audioSupportedModels.some(model => oai_settings.vertexai_model.includes(model));
+        case chat_completion_sources.OPENROUTER:
+            return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.input_modalities?.includes('audio'));
         default:
             return false;
     }
@@ -5865,6 +6156,7 @@ function updateFeatureSupportFlags() {
         openai_function_calling_supported: ToolManager.isToolCallingSupported(),
         openai_image_inlining_supported: isImageInliningSupported(),
         openai_video_inlining_supported: isVideoInliningSupported(),
+        openai_audio_inlining_supported: isAudioInliningSupported(),
     };
 
     for (const [key, value] of Object.entries(featureFlags)) {
@@ -6189,6 +6481,12 @@ export function initOpenAI() {
         saveSettingsDebounced();
     });
 
+    $('#openai_audio_inlining').on('input', function () {
+        oai_settings.audio_inlining = !!$(this).prop('checked');
+        updateFeatureSupportFlags();
+        saveSettingsDebounced();
+    });
+
     $('#continue_prefill').on('input', function () {
         oai_settings.continue_prefill = !!$(this).prop('checked');
         saveSettingsDebounced();
@@ -6392,6 +6690,10 @@ export function initOpenAI() {
         oai_settings.vertexai_express_project_id = String($(this).val());
         saveSettingsDebounced();
     });
+    $('#zai_endpoint').on('input', function () {
+        oai_settings.zai_endpoint = String($(this).val());
+        saveSettingsDebounced();
+    });
     $('#vertexai_service_account_json').on('input', onVertexAIServiceAccountJsonChange);
     $('#vertexai_validate_service_account').on('click', onVertexAIValidateServiceAccount);
     $('#vertexai_clear_service_account').on('click', onVertexAIClearServiceAccount);
@@ -6405,6 +6707,7 @@ export function initOpenAI() {
     $('#model_cohere_select').on('change', onModelChange);
     $('#model_perplexity_select').on('change', onModelChange);
     $('#model_groq_select').on('change', onModelChange);
+    $('#model_siliconflow_select').on('change', onModelChange);
     $('#model_electronhub_select').on('change', onModelChange);
     $('#model_nanogpt_select').on('change', onModelChange);
     $('#model_deepseek_select').on('change', onModelChange);

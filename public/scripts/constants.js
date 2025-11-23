@@ -68,6 +68,78 @@ export const COMETAPI_IGNORE_PATTERNS = [
 ];
 
 /**
+ * @enum {string}
+ * @readonly
+ */
+export const MEDIA_SOURCE = {
+    API: 'api',
+    UPLOAD: 'upload',
+    GENERATED: 'generated',
+    CAPTIONED: 'captioned',
+};
+
+/**
+ * @enum {string}
+ * @readonly
+ */
+export const MEDIA_DISPLAY = {
+    LIST: 'list',
+    GALLERY: 'gallery',
+};
+
+/**
+ * @enum {string}
+ * @readonly
+ */
+export const IMAGE_OVERSWIPE = {
+    GENERATE: 'generate',
+    ROLLOVER: 'rollover',
+};
+
+/**
+ * @readonly
+ */
+export const MEDIA_TYPE = {
+    getFromMime: (/** @type {string} */ mimeType) => {
+        if (mimeType.startsWith('image/')) {
+            return MEDIA_TYPE.IMAGE;
+        }
+        if (mimeType.startsWith('video/')) {
+            return MEDIA_TYPE.VIDEO;
+        }
+        if (mimeType.startsWith('audio/')) {
+            return MEDIA_TYPE.AUDIO;
+        }
+        return null;
+    },
+    IMAGE: 'image',
+    VIDEO: 'video',
+    AUDIO: 'audio',
+};
+
+/**
+ * Bitwise flag-style media request types.
+ * @enum {number}
+ * @readonly
+ */
+export const MEDIA_REQUEST_TYPE = {
+    IMAGE: 0b001,
+    VIDEO: 0b010,
+    AUDIO: 0b100,
+};
+
+/**
+ * Scroll behavior options when appending media to messages.
+ * @enum {string}
+ * @readonly
+ */
+export const SCROLL_BEHAVIOR = {
+    NONE: 'none',
+    KEEP: 'keep',
+    ADJUST: 'adjust',
+};
+
+/**
  * @type {{readonly LEFT: 'left', readonly RIGHT: 'right'}}
  */
 export const SWIPE_DIRECTION = {

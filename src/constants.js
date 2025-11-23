@@ -161,6 +161,29 @@ export const GEMINI_SAFETY = [
     },
 ];
 
+export const VERTEX_SAFETY = [
+    {
+        category: 'HARM_CATEGORY_IMAGE_HATE',
+        threshold: 'OFF',
+    },
+    {
+        category: 'HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT',
+        threshold: 'OFF',
+    },
+    {
+        category: 'HARM_CATEGORY_IMAGE_HARASSMENT',
+        threshold: 'OFF',
+    },
+    {
+        category: 'HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT',
+        threshold: 'OFF',
+    },
+    {
+        category: 'HARM_CATEGORY_JAILBREAK',
+        threshold: 'OFF',
+    },
+];
+
 export const CHAT_COMPLETION_SOURCES = {
     OPENAI: 'openai',
     CLAUDE: 'claude',
@@ -184,6 +207,7 @@ export const CHAT_COMPLETION_SOURCES = {
     COMETAPI: 'cometapi',
     AZURE_OPENAI: 'azure_openai',
     ZAI: 'zai',
+    SILICONFLOW: 'siliconflow',
 };
 
 /**
@@ -443,6 +467,9 @@ export const OPENAI_REASONING_EFFORT_MODELS = [
     'gpt-5-mini-2025-08-07',
     'gpt-5-nano',
     'gpt-5-nano-2025-08-07',
+    'gpt-5.1',
+    'gpt-5.1-2025-11-13',
+    'gpt-5.1-chat-latest',
 ];
 
 export const OPENAI_REASONING_EFFORT_MAP = {
@@ -477,4 +504,26 @@ export const MEDIA_EXTENSIONS = [
     '3gp',
     'mkv',
     'mpg',
+    'mp3',
+    'wav',
+    'ogg',
+    'flac',
+    'aac',
+    'm4a',
+    'aiff',
 ];
+
+/**
+ * Bitwise flag-style media request types.
+ */
+export const MEDIA_REQUEST_TYPE = {
+    IMAGE: 0b001,
+    VIDEO: 0b010,
+    AUDIO: 0b100,
+};
+
+
+export const ZAI_ENDPOINT = {
+    COMMON: 'common',
+    CODING: 'coding',
+};

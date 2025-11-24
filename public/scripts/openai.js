@@ -2471,11 +2471,14 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         }
 
         if (model.includes('grok-4') || model.includes('grok-code')) {
-            delete generate_data.presence_penalty;
-            delete generate_data.frequency_penalty;
+            // Only delete penalties for reasoning variants
+            if (model.includes('reasoning')) {
+                delete generate_data.presence_penalty;
+                delete generate_data.frequency_penalty;
+            }
 
-            // grok-4-fast-non-reasoning accepts stop
-            if (!model.includes('grok-4-fast-non-reasoning')) {
+            // grok-4-fast-non-reasoning and grok-4-1-fast-non-reasoning accept stop
+            if (! (model.includes('grok-4-fast-non-reasoning') || model.includes('grok-4-1-fast-non-reasoning')) ) {
                 delete generate_data.stop;
             }
         }

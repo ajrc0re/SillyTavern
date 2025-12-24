@@ -52,6 +52,7 @@ export const SECRET_KEYS = {
     HUGGINGFACE: 'api_key_huggingface',
     STABILITY: 'api_key_stability',
     CUSTOM_OPENAI_TTS: 'api_key_custom_openai_tts',
+    CHUTES: 'api_key_chutes',
     ELECTRONHUB: 'api_key_electronhub',
     NANOGPT: 'api_key_nanogpt',
     TAVILY: 'api_key_tavily',
@@ -70,6 +71,7 @@ export const SECRET_KEYS = {
     COMETAPI: 'api_key_cometapi',
     ZAI: 'api_key_zai',
     SILICONFLOW: 'api_key_siliconflow',
+    ELEVENLABS: 'api_key_elevenlabs',
 };
 
 const FRIENDLY_NAMES = {
@@ -99,6 +101,7 @@ const FRIENDLY_NAMES = {
     [SECRET_KEYS.GROQ]: 'Groq',
     [SECRET_KEYS.FEATHERLESS]: 'Featherless',
     [SECRET_KEYS.HUGGINGFACE]: 'HuggingFace',
+    [SECRET_KEYS.CHUTES]: 'Chutes',
     [SECRET_KEYS.ELECTRONHUB]: 'Electron Hub',
     [SECRET_KEYS.NANOGPT]: 'NanoGPT',
     [SECRET_KEYS.GENERIC]: 'Generic (OpenAI-compatible)',
@@ -128,6 +131,7 @@ const FRIENDLY_NAMES = {
     [SECRET_KEYS.AZURE_OPENAI]: 'Azure OpenAI',
     [SECRET_KEYS.ZAI]: 'Z.AI',
     [SECRET_KEYS.SILICONFLOW]: 'SiliconFlow',
+    [SECRET_KEYS.ELEVENLABS]: 'ElevenLabs TTS',
 };
 
 const INPUT_MAP = {
@@ -156,6 +160,7 @@ const INPUT_MAP = {
     [SECRET_KEYS.GROQ]: '#api_key_groq',
     [SECRET_KEYS.FEATHERLESS]: '#api_key_featherless',
     [SECRET_KEYS.HUGGINGFACE]: '#api_key_huggingface',
+    [SECRET_KEYS.CHUTES]: '#api_key_chutes',
     [SECRET_KEYS.ELECTRONHUB]: '#api_key_electronhub',
     [SECRET_KEYS.NANOGPT]: '#api_key_nanogpt',
     [SECRET_KEYS.GENERIC]: '#api_key_generic',
@@ -265,7 +270,7 @@ function getActiveSecretLabel(key) {
 async function viewSecrets() {
     const response = await fetch('/api/secrets/view', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: getRequestHeaders({ omitContentType: true }),
     });
 
     if (response.status == 403) {
@@ -369,7 +374,7 @@ export async function readSecretState() {
     try {
         const response = await fetch('/api/secrets/read', {
             method: 'POST',
-            headers: getRequestHeaders(),
+            headers: getRequestHeaders({ omitContentType: true }),
         });
 
         if (response.ok) {

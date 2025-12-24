@@ -2461,6 +2461,7 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
 
     if (isXAI) {
         const model = generate_data.model;
+        console.log('isXAI');
         if (model.includes('grok-3-mini')) {
             delete generate_data.presence_penalty;
             delete generate_data.frequency_penalty;
@@ -2471,14 +2472,17 @@ async function sendOpenAIRequest(type, messages, signal, { jsonSchema = null } =
         }
 
         if (model.includes('grok-4') || model.includes('grok-code')) {
+            console.log('grok-4 or grok-code');
             // Only delete penalties for reasoning variants
             if (model.includes('reasoning')) {
+                console.log('Penalties preserved for non-reasoning!');
                 delete generate_data.presence_penalty;
                 delete generate_data.frequency_penalty;
             }
 
             // grok-4-fast-non-reasoning and grok-4-1-fast-non-reasoning accept stop
             if (! (model.includes('grok-4-fast-non-reasoning') || model.includes('grok-4-1-fast-non-reasoning')) ) {
+                console.log('stop preserved for non-reasoning!');
                 delete generate_data.stop;
             }
         }

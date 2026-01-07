@@ -1948,7 +1948,7 @@ function saveModelList(data) {
     }
 
     if (oai_settings.chat_completion_source == chat_completion_sources.CHUTES) {
-        model_list = model_list.filter(model => !model.id.toLowerCase().includes('affine'));
+        model_list = model_list.filter(model => typeof model.id === 'string' && !model.id.toLowerCase().includes('affine'));
 
         model_list = chutesSortBy(model_list, oai_settings.chutes_sort_models);
 
@@ -2488,6 +2488,8 @@ export async function createGenerationParameters(settings, model, type, messages
         chat_completion_sources.VERTEXAI,
         chat_completion_sources.DEEPSEEK,
         chat_completion_sources.XAI,
+        chat_completion_sources.ZAI,
+        chat_completion_sources.MOONSHOT,
     ];
 
     // Sources that support logprobs
@@ -2751,7 +2753,8 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data['seed'] = settings.seed;
     }
 
-    if (gptSources.includes(settings.chat_completion_source) && /^(o1|o3|o4)/.test(model)) {
+    if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source) && /^(o1|o3|o4)/.test(model) ||
+        (chat_completion_sources.OPENROUTER === settings.chat_completion_source && /^openai\/(o1|o3|o4)/.test(model))) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
@@ -2762,7 +2765,7 @@ export async function createGenerationParameters(settings, model, type, messages
         delete generate_data.top_p;
         delete generate_data.frequency_penalty;
         delete generate_data.presence_penalty;
-        if (model.startsWith('o1')) {
+        if (/^(openai\/)?(o1)/.test(model)) {
             generate_data.messages.forEach((msg) => {
                 if (msg.role === 'system') {
                     msg.role = 'user';
@@ -2774,7 +2777,7 @@ export async function createGenerationParameters(settings, model, type, messages
         }
     }
 
-    if (gptSources.includes(settings.chat_completion_source) && /^gpt-5/.test(model)) {
+    if (gptSources.includes(settings.chat_completion_source) && /gpt-5/.test(model)) {
         generate_data.max_completion_tokens = generate_data.max_tokens;
         delete generate_data.max_tokens;
         delete generate_data.logprobs;
@@ -4137,6 +4140,8 @@ async function getStatusOpen() {
         chat_completion_sources.VERTEXAI,
         chat_completion_sources.DEEPSEEK,
         chat_completion_sources.XAI,
+        chat_completion_sources.ZAI,
+        chat_completion_sources.MOONSHOT,
     ];
     if (oai_settings.reverse_proxy && validateProxySources.includes(oai_settings.chat_completion_source)) {
         await validateReverseProxy();
@@ -4693,6 +4698,9 @@ function getMaxContextOpenAI(value) {
     else if (value.includes('gpt-4.1')) {
         return max_1mil;
     }
+    else if (value.includes('gpt-audio')) {
+        return max_128k;
+    }
     else if (value.startsWith('o1')) {
         return max_128k;
     }
@@ -4709,6 +4717,9 @@ function getMaxContextOpenAI(value) {
         return max_8k;
     }
     else if (['gpt-4-32k', 'gpt-4-32k-0314', 'gpt-4-32k-0613'].includes(value)) {
+        return max_32k;
+    }
+    else if (value.includes('gpt-realtime')) {
         return max_32k;
     }
     else if (['gpt-3.5-turbo-16k', 'gpt-3.5-turbo-16k-0613'].includes(value)) {
@@ -4810,11 +4821,13 @@ function getZaiMaxContext(model, isUnlocked) {
         'glm-4.7': max_200k,
         'glm-4.6v': max_128k,
         'glm-4.6v-flash': max_128k,
+        'glm-4.6v-flashx': max_128k,
         'glm-4.6': max_200k,
         'glm-4.5': max_128k,
         'glm-4-32b-0414-128k': max_128k,
         'glm-4.5-air': max_128k,
         'glm-4.5v': max_64k,
+        'autoglm-phone-multilingual': max_64k,
     };
 
     // Return context size if model found, otherwise default to 128k
@@ -5596,11 +5609,11 @@ async function onConnectButtonClick(e) {
         [chat_completion_sources.DEEPSEEK]: { key: SECRET_KEYS.DEEPSEEK, selector: '#api_key_deepseek', proxy: true },
         [chat_completion_sources.XAI]: { key: SECRET_KEYS.XAI, selector: '#api_key_xai', proxy: true },
         [chat_completion_sources.AIMLAPI]: { key: SECRET_KEYS.AIMLAPI, selector: '#api_key_aimlapi', proxy: false },
-        [chat_completion_sources.MOONSHOT]: { key: SECRET_KEYS.MOONSHOT, selector: '#api_key_moonshot', proxy: false },
+        [chat_completion_sources.MOONSHOT]: { key: SECRET_KEYS.MOONSHOT, selector: '#api_key_moonshot', proxy: true },
         [chat_completion_sources.FIREWORKS]: { key: SECRET_KEYS.FIREWORKS, selector: '#api_key_fireworks', proxy: false },
         [chat_completion_sources.COMETAPI]: { key: SECRET_KEYS.COMETAPI, selector: '#api_key_cometapi', proxy: false },
         [chat_completion_sources.AZURE_OPENAI]: { key: SECRET_KEYS.AZURE_OPENAI, selector: '#api_key_azure_openai', proxy: false },
-        [chat_completion_sources.ZAI]: { key: SECRET_KEYS.ZAI, selector: '#api_key_zai', proxy: false },
+        [chat_completion_sources.ZAI]: { key: SECRET_KEYS.ZAI, selector: '#api_key_zai', proxy: true },
         [chat_completion_sources.CHUTES]: { key: SECRET_KEYS.CHUTES, selector: '#api_key_chutes', proxy: false },
     };
 
@@ -5837,6 +5850,7 @@ export function isImageInliningSupported() {
         // Z.AI (GLM)
         'glm-4.5v',
         'glm-4.6v',
+        'autoglm-phone',
         // SiliconFlow
         'Qwen/Qwen3-VL-32B-Instruct',
         'Qwen/Qwen3-VL-8B-Instruct',
@@ -5947,21 +5961,30 @@ export function isAudioInliningSupported() {
         return false;
     }
 
-    // Only Gemini models support audio for now
     const audioSupportedModels = [
         'gemini-2.0',
         'gemini-2.5',
         'gemini-3',
         'gemini-exp-1206',
+        'gpt-4o-audio',
+        'gpt-4o-realtime',
+        'gpt-4o-mini-audio',
+        'gpt-4o-mini-realtime',
+        'gpt-audio',
+        'gpt-realtime',
     ];
 
     switch (oai_settings.chat_completion_source) {
+        case chat_completion_sources.OPENAI:
+            return audioSupportedModels.some(model => oai_settings.openai_model.includes(model));
         case chat_completion_sources.MAKERSUITE:
             return audioSupportedModels.some(model => oai_settings.google_model.includes(model));
         case chat_completion_sources.VERTEXAI:
             return audioSupportedModels.some(model => oai_settings.vertexai_model.includes(model));
         case chat_completion_sources.OPENROUTER:
             return (Array.isArray(model_list) && model_list.find(m => m.id === oai_settings.openrouter_model)?.architecture?.input_modalities?.includes('audio'));
+        case chat_completion_sources.CUSTOM:
+            return true;
         default:
             return false;
     }

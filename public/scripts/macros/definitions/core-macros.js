@@ -297,7 +297,7 @@ export function registerCoreMacros() {
             '{{roll::6}}',
             '{{roll::3d6+4}}',
         ],
-        handler: ({ unnamedArgs: [formula] }) => {
+        handler: ({ unnamedArgs: [formula], warn }) => {
             // If only digits were provided, treat it as `1dX`.
             if (/^\d+$/.test(formula)) {
                 formula = `1d${formula}`;
@@ -305,7 +305,7 @@ export function registerCoreMacros() {
 
             const isValid = droll.validate(formula);
             if (!isValid) {
-                console.debug(`Invalid roll formula: ${formula}`);
+                warn(`Invalid roll formula: ${formula}`);
                 return '';
             }
 
@@ -342,10 +342,15 @@ export function registerCoreMacros() {
     MacroRegistry.registerMacro('pick', {
         category: MacroCategory.RANDOM,
         list: true,
-        description: 'Picks a random item from a list, but keeps the choice stable for a given chat and macro position.',
+        description: 'Picks a random item from a list, but keeps the choice stable for a given chat and macro position. Can be rerolled via /reroll-pick slash command.',
+        // TODO: add expanded documentation once HTML details are supported
+        // descriptionDetails: `
+        //     <p>Picks a random item from a list, but keeps the choice stable for a given chat and macro position.</p>
+        //     <p>The choice can be reset per chat using the <code>/reroll-pick</code> slash command.</p>
+        // `,
         returns: 'Stable randomly selected item from the list.',
         exampleUsage: ['{{pick::blonde::brown::red::black::blue}}'],
-        handler: ({ list, range, env }) => {
+        handler: ({ list, globalOffset, env }) => {
             // Handle old legacy cases, where we have to split the list manually
             if (list.length === 1) {
                 list = readSingleArgsRandomList(list[0]);
@@ -355,14 +360,24 @@ export function registerCoreMacros() {
                 return '';
             }
 
+            // NOTE:
+            // When changing the hashing logic, make sure to update unit test functionality
+            // in registerTestablePick() to be identical.
+
             const chatIdHash = getChatIdHash();
 
             // Use the full original input string for deterministic behavior
             const rawContentHash = env.contentHash;
 
-            const offset = typeof range?.startOffset === 'number' ? range.startOffset : 0;
+            // Use globalOffset for deterministic seeding - this ensures identical macros
+            // at different positions in the document produce different results, even when
+            // nested inside arguments or scoped content
+            const offset = globalOffset;
 
-            const combinedSeedString = `${chatIdHash}-${rawContentHash}-${offset}`;
+            // Reroll seed allows users to reset all picks in the chat via /reroll-pick command
+            const rerollSeed = chat_metadata.pick_reroll_seed || null;
+
+            const combinedSeedString = [chatIdHash, rawContentHash, offset, rerollSeed].filter(it => it !== null).join('-');
             const finalSeed = getStringHash(combinedSeedString);
             const rng = seedrandom(String(finalSeed));
             const randomIndex = Math.floor(rng() * list.length);
@@ -433,13 +448,13 @@ export function registerCoreMacros() {
 }
 
 function getChatIdHash() {
-    const cachedIdHash = chat_metadata['chat_id_hash'];
+    const cachedIdHash = chat_metadata.chat_id_hash;
     if (typeof cachedIdHash === 'number') {
         return cachedIdHash;
     }
 
-    const chatId = chat_metadata['main_chat'] ?? getCurrentChatId();
+    const chatId = chat_metadata.main_chat ?? getCurrentChatId();
     const chatIdHash = getStringHash(chatId);
-    chat_metadata['chat_id_hash'] = chatIdHash;
+    chat_metadata.chat_id_hash = chatIdHash;
     return chatIdHash;
 }

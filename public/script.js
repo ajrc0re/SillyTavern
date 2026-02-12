@@ -837,13 +837,14 @@ export async function selectCharacterById(id, { switchMenu = true } = {}) {
     if (selected_group || String(this_chid) !== String(id)) {
         //if clicked on a different character from what was currently selected
         if (!is_send_press) {
-            await clearChat();
-            cancelTtsPlay();
+            setCharacterId(undefined);
+            setCharacterName('');
             resetSelectedGroup();
+            await clearChat({ clearData: true });
+            cancelTtsPlay();
             this_edit_mes_id = undefined;
             selected_button = 'character_edit';
             setCharacterId(id);
-            chat.length = 0;
             chat_metadata = {};
             await getChat();
         }
@@ -1193,7 +1194,7 @@ export async function getOneCharacter(avatarUrl) {
     }
 }
 
-function getCharacterSource(chId = this_chid) {
+export function getCharacterSource(chId = this_chid) {
     const character = characters[chId];
 
     if (!character) {
@@ -1351,8 +1352,7 @@ export async function deleteCharacterChatByName(characterId, fileName) {
 }
 
 export async function replaceCurrentChat() {
-    await clearChat();
-    chat.length = 0;
+    await clearChat({ clearData: true });
 
     const chatsResponse = await fetch('/api/characters/chats', {
         method: 'POST',
@@ -1530,7 +1530,12 @@ export function cancelDebouncedChatSave() {
     }
 }
 
-export async function clearChat() {
+/**
+ * Visually removes all chat message elements.
+ * @param {object} [options] Options
+ * @param {boolean} [options.clearData=false] Optionally clear the chat array's contents.
+ */
+export async function clearChat({ clearData = false } = {}) {
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
     closeMessageEditor();
@@ -1547,6 +1552,8 @@ export async function clearChat() {
 
     await saveItemizedPrompts(getCurrentChatId());
     itemizedPrompts.length = 0;
+
+    if (clearData) chat.length = 0;
 }
 
 export async function deleteLastMessage() {
@@ -1629,8 +1636,7 @@ export const reloadCurrentChat = reloadChatMutex.update.bind(reloadChatMutex);
  */
 export async function reloadCurrentChatUnsafe() {
     preserveNeutralChat();
-    await clearChat();
-    chat.length = 0;
+    await clearChat({ clearData: true });
 
     if (selected_group) {
         await getGroupChat(selected_group, true);
@@ -4134,7 +4140,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     const isInstruct = power_user.instruct.enabled && main_api !== 'openai';
     const isImpersonate = type == 'impersonate';
 
-    if (!(dryRun || type == 'regenerate' || type == 'swipe' || type == 'quiet')) {
+    if (!(dryRun || depth || type == 'regenerate' || type == 'swipe' || type == 'quiet')) {
         const interruptedByCommand = await processCommands(String($('#send_textarea').val()));
 
         if (interruptedByCommand) {
@@ -4223,7 +4229,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     const lastMessage = chat[chat.length - 1];
 
     let textareaText;
-    if (type !== 'regenerate' && type !== 'swipe' && type !== 'quiet' && !isImpersonate && !dryRun) {
+    if (type !== 'regenerate' && type !== 'swipe' && type !== 'quiet' && !isImpersonate && !dryRun && !depth) {
         is_send_press = true;
         textareaText = String($('#send_textarea').val());
         $('#send_textarea').val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
@@ -4232,7 +4238,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         if (chat.length && lastMessage.is_user) {
             //do nothing? why does this check exist?
         }
-        else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && chat.length) {
+        else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && !depth && chat.length) {
             deleteItemizedPromptForMessage(chat.length - 1);
             chat.length = chat.length - 1;
             await removeLastMessage();
@@ -4273,7 +4279,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         'continue',
     ];
     //for normal messages sent from user..
-    if ((textareaText != '' || (hasPendingFileAttachment() && !noAttachTypes.includes(type))) && !automatic_trigger && type !== 'quiet' && !dryRun) {
+    if ((textareaText != '' || (hasPendingFileAttachment() && !noAttachTypes.includes(type))) && !automatic_trigger && type !== 'quiet' && !dryRun && !depth) {
         // If user message contains no text other than bias - send as a system message
         if (messageBias && !removeMacros(textareaText)) {
             sendSystemMessage(system_message_types.GENERIC, ' ', { bias: messageBias });
@@ -4282,7 +4288,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             await sendMessageAsUser(textareaText, messageBias);
         }
     }
-    else if (textareaText == '' && !automatic_trigger && !dryRun && [undefined, 'normal'].includes(type) && main_api == 'openai' && oai_settings.send_if_empty.trim().length > 0) {
+    else if (textareaText == '' && !automatic_trigger && !dryRun && [undefined, 'normal'].includes(type) && main_api == 'openai' && oai_settings.send_if_empty.trim().length > 0 && !depth) {
         // Use send_if_empty if set and the user message is empty. Only when sending messages normally
         await sendMessageAsUser(oai_settings.send_if_empty.trim(), messageBias);
     }
@@ -6702,7 +6708,10 @@ export function syncMesToSwipe(messageId = null) {
         return false;
     }
 
-    targetMessage.swipes[targetMessage.swipe_id] = targetMessage.mes;
+    // Only sync swipes if the chat is not pristine, so that macros in the greeting can resolve again on swipe
+    if (chat_metadata.tainted || chat.length > 1) {
+        targetMessage.swipes[targetMessage.swipe_id] = targetMessage.mes;
+    }
 
     targetSwipeInfo.send_date = targetMessage.send_date;
     targetSwipeInfo.gen_started = targetMessage.gen_started;
@@ -7512,9 +7521,8 @@ function getFirstMessage() {
 
 export async function openCharacterChat(file_name) {
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat();
+    await clearChat({ clearData: true });
     characters[this_chid].chat = file_name;
-    chat.length = 0;
     chat_metadata = {};
     await getChat();
     $('#selected_chat_pole').val(file_name);
@@ -8341,8 +8349,6 @@ export async function displayPastChats(hightlightNames = []) {
 
 async function displayChats(searchQuery, currentChat, displayName, avatarImg, selected_group, highlightNames) {
     try {
-        const trimExtension = (fileName) => String(fileName).replace('.jsonl', '');
-
         const response = await fetch('/api/chats/search', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -8363,7 +8369,7 @@ async function displayChats(searchQuery, currentChat, displayName, avatarImg, se
         filteredData.sort((a, b) => sortMoments(timestampToMoment(a.last_mes), timestampToMoment(b.last_mes)));
 
         for (const chat of filteredData) {
-            const isSelected = trimExtension(currentChat) === trimExtension(chat.file_name);
+            const isSelected = currentChat === chat.file_name;
             const template = $('#past_chat_template .select_chat_block_wrapper').clone();
             template.find('.select_chat_block').attr('file_name', chat.file_name);
             template.find('.avatar img').attr('src', avatarImg);
@@ -10354,8 +10360,7 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
 
     //Fix it; New chat doesn't create while open create character menu
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-    await clearChat();
-    chat.length = 0;
+    await clearChat({ clearData: true });
 
     chat_file_for_del = getCurrentChatDetails()?.sessionName;
 
@@ -10474,8 +10479,7 @@ export async function renameChat(oldFileName, newName) {
 export async function closeCurrentChat() {
     if (is_send_press == false) {
         await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
-        await clearChat();
-        chat.length = 0;
+        await clearChat({ clearData: true });
         resetSelectedGroup();
         setCharacterId(undefined);
         setCharacterName('');
@@ -11006,7 +11010,7 @@ jQuery(async function () {
         if (group) {
             await deleteGroupChat(group, chatFile);
         } else {
-            await delChat(chatFile);
+            await delChat(`${chatFile}.jsonl`);
         }
 
         if (fromSlashCommand) {  // When called from `/delchat` command, don't re-open the history view.
@@ -11023,18 +11027,18 @@ jQuery(async function () {
 
     $(document).on('click', '.PastChat_cross', async function (e, { fromSlashCommand = false } = {}) {
         e.stopPropagation();
-        chat_file_for_del = $(this).attr('file_name');
-        console.debug('detected cross click for' + chat_file_for_del);
+        const deleteFileName = $(this).attr('file_name');
+        console.debug('detected cross click for' + deleteFileName);
 
         // Skip confirmation if called from a slash command.
         if (fromSlashCommand) {
-            await handleDeleteChat(chat_file_for_del, selected_group, true);
+            await handleDeleteChat(deleteFileName, selected_group, true);
             return;
         }
 
         const result = await callGenericPopup('<h3>' + t`Delete the Chat File?` + '</h3>', POPUP_TYPE.CONFIRM);
         if (result === POPUP_RESULT.AFFIRMATIVE) {
-            await handleDeleteChat(chat_file_for_del, selected_group, false);
+            await handleDeleteChat(deleteFileName, selected_group, false);
         }
     });
 
@@ -11068,8 +11072,7 @@ jQuery(async function () {
         $('#character_popup').css('display', 'none');
     });
 
-    $('#dialogue_popup_ok').on('click', async function (_e, customData) {
-        const fromSlashCommand = customData?.fromSlashCommand || false;
+    $('#dialogue_popup_ok').on('click', async function (_e) {
         dialogueCloseStop = false;
         $('#shadow_popup').transition({
             opacity: 0,
@@ -11082,10 +11085,6 @@ jQuery(async function () {
             $('#dialogue_popup').removeClass('large_dialogue_popup');
             $('#dialogue_popup').removeClass('wide_dialogue_popup');
         }, animation_duration);
-
-        if (popup_type == 'del_chat') {
-            await handleDeleteChat(chat_file_for_del, selected_group, fromSlashCommand);
-        }
 
         if (dialogueResolve) {
             if (popup_type == 'input') {
@@ -11199,8 +11198,7 @@ jQuery(async function () {
 
     $(document).on('click', '.renameChatButton', async function (e) {
         e.stopPropagation();
-        const oldFileNameFull = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text();
-        const oldFileName = oldFileNameFull.replace('.jsonl', '');
+        const oldFileName = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text();
 
         const popupText = await renderTemplateAsync('chatRename');
         const newName = await callGenericPopup(popupText, POPUP_TYPE.INPUT, oldFileName);
@@ -11221,10 +11219,9 @@ jQuery(async function () {
         e.stopPropagation();
         const format = $(this).data('format') || 'txt';
         await saveChatConditional();
-        const filenamefull = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text();
-        console.log(`exporting ${filenamefull} in ${format} format`);
+        const filename = $(this).closest('.select_chat_block_wrapper').find('.select_chat_block_filename').text();
+        console.log(`exporting ${filename} in ${format} format`);
 
-        const filename = filenamefull.replace('.jsonl', '');
         const body = {
             is_group: !!selected_group,
             avatar_url: characters[this_chid]?.avatar,

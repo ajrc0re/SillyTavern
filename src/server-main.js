@@ -59,7 +59,6 @@ import {
     getConfigValue,
 } from './util.js';
 import { UPLOADS_DIRECTORY } from './constants.js';
-import { ensureThumbnailCache } from './endpoints/thumbnails.js';
 
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
@@ -70,6 +69,7 @@ import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } fro
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
+import { initializeAllUserMetadata } from './endpoints/image-metadata.js';
 
 // Work around a node v20.0.0, v20.1.0, and v20.2.0 bug. The issue was fixed in v20.3.0.
 // https://github.com/nodejs/node/issues/47822#issuecomment-1564708870
@@ -103,12 +103,32 @@ app.use(bodyParser.json({ limit: '500mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '500mb' }));
 
 // CORS Settings //
-const CORS = cors({
-    origin: 'null',
-    methods: ['OPTIONS'],
-});
+const corsEnabled = getConfigValue('cors.enabled', true, 'boolean');
+if (corsEnabled) {
+    const corsOrigin = getConfigValue('cors.origin', 'null');
+    const corsMethods = getConfigValue('cors.methods', ['OPTIONS']);
+    const corsAllowedHeaders = getConfigValue('cors.allowedHeaders', []);
+    const corsExposedHeaders = getConfigValue('cors.exposedHeaders', []);
+    const corsCredentials = getConfigValue('cors.credentials', false, 'boolean');
+    const corsMaxAge = getConfigValue('cors.maxAge', null, 'number');
 
-app.use(CORS);
+    /** @type {cors.CorsOptions} */
+    const corsOptions = {
+        origin: corsOrigin,
+        methods: corsMethods,
+        credentials: corsCredentials,
+    };
+    if (Array.isArray(corsAllowedHeaders) && corsAllowedHeaders.length > 0) {
+        corsOptions.allowedHeaders = corsAllowedHeaders;
+    }
+    if (Array.isArray(corsExposedHeaders) && corsExposedHeaders.length > 0) {
+        corsOptions.exposedHeaders = corsExposedHeaders;
+    }
+    if (corsMaxAge !== null && Number.isInteger(corsMaxAge)) {
+        corsOptions.maxAge = corsMaxAge;
+    }
+    app.use(cors(corsOptions));
+}
 
 if (cliArgs.listen && cliArgs.basicAuthMode) {
     app.use(basicAuthMiddleware);
@@ -269,7 +289,6 @@ async function preSetupTasks() {
     const directories = await getUserDirectoriesList();
     await migrateGroupChatsMetadataFormat(directories);
     await checkForNewContent(directories);
-    await ensureThumbnailCache(directories);
     await diskCache.verify(directories);
     migrateFlatSecrets(directories);
     cleanUploads();
@@ -277,6 +296,9 @@ async function preSetupTasks() {
 
     await settingsInit();
     await statsInit();
+
+    // Initialize image metadata
+    await initializeAllUserMetadata(directories);
 
     const pluginsDirectory = path.join(serverDirectory, 'plugins');
     const cleanupPlugins = await loadPlugins(app, pluginsDirectory);
